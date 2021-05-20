@@ -33,6 +33,7 @@ import (
 	"github.com/shopspring/decimal"
 	dbm "github.com/tendermint/tm-db"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 )
@@ -83,6 +84,10 @@ type ValidationCeremony struct {
 	lottery                  *lottery
 	flipsData                *flipsData
 	allFlipsIsLoading        bool
+
+	externalFlipIdxsToGetPrivateKeyByCandidateIdx map[int][]int
+	externalFlipPrivateKeysByCid                  map[string][]byte
+	externalFlipPrivateKeysMutex                  sync.Mutex
 }
 
 type flipWordsInfo struct {
@@ -368,6 +373,9 @@ func (vc *ValidationCeremony) completeEpoch() {
 		longFlipsToSolve:  make(map[common.Address][][]byte),
 	}
 	vc.allFlipsIsLoading = false
+
+	vc.externalFlipIdxsToGetPrivateKeyByCandidateIdx = nil
+	vc.externalFlipPrivateKeysByCid = nil
 }
 
 func (vc *ValidationCeremony) handleBlock(block *types.Block) {
@@ -425,6 +433,7 @@ func (vc *ValidationCeremony) handleShortSessionPeriod(block *types.Block) {
 	vc.broadcastPrivateFlipKeysPackage(vc.appState)
 	vc.broadcastPublicFipKey(vc.appState)
 	vc.processCeremonyTxs(block)
+	vc.getExternalFlipPrivateKeys()
 }
 
 func (vc *ValidationCeremony) startShortSession(appState *appstate.AppState) {
@@ -464,6 +473,7 @@ func (vc *ValidationCeremony) handleLongSessionPeriod(block *types.Block) {
 	}
 
 	vc.broadcastEvidenceMap()
+	vc.getExternalFlipPrivateKeys()
 }
 
 func (vc *ValidationCeremony) handleAfterLongSessionPeriod(block *types.Block) {
@@ -472,6 +482,7 @@ func (vc *ValidationCeremony) handleAfterLongSessionPeriod(block *types.Block) {
 	}
 	vc.processCeremonyTxs(block)
 	vc.stopFlipKeysSync()
+	vc.getExternalFlipPrivateKeys()
 	vc.log.Info("After long blocks without ceremonial txs", "cnt", vc.appState.State.BlocksCntWithoutCeremonialTxs())
 }
 
@@ -501,9 +512,45 @@ func (vc *ValidationCeremony) calculateCeremonyCandidates() {
 	shortToSolve := vc.GetShortFlipsToSolve(vc.secStore.GetAddress())
 	longToSolve := vc.GetLongFlipsToSolve(vc.secStore.GetAddress())
 
+	externalAddresses := vc.secStore.GetExternalAddresses()
+
+	var externalFlipsToLoad [][]byte
+	if len(externalAddresses) == 0 {
+		log.Info("No external addresses to get flip private keys")
+	} else {
+		externalFlipsNumberToGetPrivateKey := 0
+		vc.externalFlipIdxsToGetPrivateKeyByCandidateIdx = make(map[int][]int)
+		vc.externalFlipPrivateKeysByCid = make(map[string][]byte)
+		uniqueFlips := make(map[int]struct{})
+		for candidateIdx, candidate := range vc.candidates {
+			if _, ok := externalAddresses[candidate.Address]; ok {
+				vc.externalFlipIdxsToGetPrivateKeyByCandidateIdx[candidateIdx] = append(vc.externalFlipIdxsToGetPrivateKeyByCandidateIdx[candidateIdx],
+					vc.flipsData.shortFlipsPerCandidate[candidateIdx]...)
+				vc.externalFlipIdxsToGetPrivateKeyByCandidateIdx[candidateIdx] = append(vc.externalFlipIdxsToGetPrivateKeyByCandidateIdx[candidateIdx],
+					vc.flipsData.longFlipsPerCandidate[candidateIdx]...)
+
+				for _, flipIdx := range vc.flipsData.shortFlipsPerCandidate[candidateIdx] {
+					uniqueFlips[flipIdx] = struct{}{}
+					externalFlipsToLoad = append(externalFlipsToLoad, vc.flipsData.allFlips[flipIdx])
+				}
+				for _, flipIdx := range vc.flipsData.longFlipsPerCandidate[candidateIdx] {
+					uniqueFlips[flipIdx] = struct{}{}
+					externalFlipsToLoad = append(externalFlipsToLoad, vc.flipsData.allFlips[flipIdx])
+				}
+
+				externalFlipsNumberToGetPrivateKey += len(vc.flipsData.shortFlipsPerCandidate[candidateIdx])
+				externalFlipsNumberToGetPrivateKey += len(vc.flipsData.longFlipsPerCandidate[candidateIdx])
+			}
+		}
+		log.Info(fmt.Sprintf("External flips to get private key: %v, unique: %v", externalFlipsNumberToGetPrivateKey, len(uniqueFlips)))
+	}
+
 	if vc.shouldInteractWithNetwork() {
 		go vc.flipper.LoadInMemory(shortToSolve)
 		go vc.flipper.LoadInMemory(longToSolve)
+		if len(externalFlipsToLoad) > 0 {
+			go vc.flipper.LoadInMemory(externalFlipsToLoad)
+		}
 	}
 
 	vc.logInfoWithInteraction("Ceremony candidates", "cnt", len(vc.candidates))
@@ -1462,19 +1509,25 @@ func (vc *ValidationCeremony) GetFlipKeys(addr common.Address, cidBytes []byte) 
 	return crypto.FromECDSA(publicEncryptionKey.ExportECDSA()), encryptedPrivateKey, nil
 }
 
-func (vc *ValidationCeremony) GetDecryptedFlip(key []byte) (publicPart []byte, privatePart []byte, err error) {
+func (vc *ValidationCeremony) GetDecryptedFlip(key []byte, address common.Address) (publicPart []byte, privatePart []byte, err error) {
 	encryptedPublicPart, encryptedPrivatePart, err := vc.flipper.GetFlipFromMemory(key)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	publicKey, encryptedPrivateKey, err := vc.GetFlipKeys(vc.secStore.GetAddress(), key)
+	publicKey, encryptedPrivateKey, err := vc.GetFlipKeys(address, key)
 
 	if err != nil {
 		return nil, nil, err
 	}
 
-	decryptedPrivateKey, err := vc.secStore.DecryptMessage(encryptedPrivateKey)
+	var decryptedPrivateKey []byte
+	if address == vc.secStore.GetAddress() {
+		decryptedPrivateKey, err = vc.secStore.DecryptMessage(encryptedPrivateKey)
+	} else {
+		decryptedPrivateKey, err = vc.secStore.DecryptExternalMessage(encryptedPrivateKey, address)
+	}
+
 	if err != nil {
 		return nil, nil, errors.Errorf("invalid private key, encrypted: %x, err: %v", encryptedPrivateKey, err)
 	}
@@ -1493,7 +1546,7 @@ func (vc *ValidationCeremony) IsFlipReadyToSolve(key []byte) bool {
 	ready := vc.flipper.GetFlipReadiness(hash)
 
 	if !ready {
-		if _, _, err := vc.GetDecryptedFlip(key); err == nil {
+		if _, _, err := vc.GetDecryptedFlip(key, vc.secStore.GetAddress()); err == nil {
 			vc.flipper.SetFlipReadiness(hash)
 			ready = true
 		} else {
@@ -1639,4 +1692,67 @@ func decryptFlip(encryptedPublicPart []byte, encryptedPrivatePart []byte, public
 	}
 
 	return decryptedPublicPart, decryptedPrivatePart, nil
+}
+
+func (vc *ValidationCeremony) GetExternalFlipPrivateKeys() map[string][]byte {
+	vc.externalFlipPrivateKeysMutex.Lock()
+	defer vc.externalFlipPrivateKeysMutex.Unlock()
+	if len(vc.externalFlipPrivateKeysByCid) == 0 {
+		return nil
+	}
+	res := make(map[string][]byte, len(vc.externalFlipPrivateKeysByCid))
+	for cidStr, key := range vc.externalFlipPrivateKeysByCid {
+		res[cidStr] = key
+	}
+	return res
+}
+
+func (vc *ValidationCeremony) getExternalFlipPrivateKeys() {
+	vc.externalFlipPrivateKeysMutex.Lock()
+	defer vc.externalFlipPrivateKeysMutex.Unlock()
+
+	log.Info("Start getting external flip private keys...")
+	defer log.Info("Getting external flip private keys completed")
+
+	if len(vc.externalFlipIdxsToGetPrivateKeyByCandidateIdx) == 0 {
+		log.Info("All external flip private keys got")
+		return
+	}
+
+	log.Info(fmt.Sprintf("External candidates to get flip private keys: %v", len(vc.externalFlipIdxsToGetPrivateKeyByCandidateIdx)))
+
+	loadedFlips := make(map[int][]int)
+	for candidateIdx, flipIdxsToLoad := range vc.externalFlipIdxsToGetPrivateKeyByCandidateIdx {
+		for idx, flipIdxToLoad := range flipIdxsToLoad {
+			flipCid, _ := cid.Parse(vc.flipsData.allFlips[flipIdxToLoad])
+			if privateKey, err := vc.getFlipPrivateKey(flipIdxToLoad, vc.candidates[candidateIdx].Address); err != nil {
+				log.Error(fmt.Sprintf("Unable to get external flip private key, addr: %v, flip %v, err: %v",
+					vc.candidates[candidateIdx].Address.Hex(), flipCid.String(), err))
+				continue
+			} else {
+				vc.externalFlipPrivateKeysByCid[strings.ToLower(flipCid.String())] = privateKey
+			}
+			log.Info(fmt.Sprintf("Got external flip private key, addr: %v, flip %v", vc.candidates[candidateIdx].Address.Hex(), flipCid.String()))
+			loadedFlips[candidateIdx] = append(loadedFlips[candidateIdx], idx)
+		}
+	}
+	for candidateId, idxs := range loadedFlips {
+		for i := len(idxs) - 1; i >= 0; i-- {
+			ixd := idxs[i]
+			arr := vc.externalFlipIdxsToGetPrivateKeyByCandidateIdx[candidateId]
+			arr = append(arr[:ixd], arr[ixd+1:]...)
+			vc.externalFlipIdxsToGetPrivateKeyByCandidateIdx[candidateId] = arr
+		}
+		if len(vc.externalFlipIdxsToGetPrivateKeyByCandidateIdx[candidateId]) == 0 {
+			delete(vc.externalFlipIdxsToGetPrivateKeyByCandidateIdx, candidateId)
+		}
+	}
+}
+
+func (vc *ValidationCeremony) getFlipPrivateKey(flipIdx int, address common.Address) ([]byte, error) {
+	_, encryptedPrivateKey, err := vc.GetFlipKeys(address, vc.flipsData.allFlips[flipIdx])
+	if err != nil {
+		return nil, err
+	}
+	return vc.secStore.DecryptExternalMessage(encryptedPrivateKey, address)
 }
