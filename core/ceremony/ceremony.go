@@ -469,7 +469,7 @@ func (vc *ValidationCeremony) handleAfterLongSessionPeriod(block *types.Block) {
 	vc.stopFlipKeysSync()
 	vc.log.Info("After long blocks without ceremonial txs", "cnt", vc.appState.State.BlocksCntWithoutCeremonialTxs())
 	for shardId, proposers := range vc.appState.State.EmptyBlocksByShard() {
-		vc.log.Info("After long blocks without ceremonial txs", "shardId", shardId , "cnt",len(proposers))
+		vc.log.Info("After long blocks without ceremonial txs", "shardId", shardId, "cnt", len(proposers))
 	}
 }
 
@@ -875,8 +875,7 @@ func (vc *ValidationCeremony) ApplyNewEpoch(height uint64, appState *appstate.Ap
 	vc.applyEpochMutex.Lock()
 	defer vc.applyEpochMutex.Unlock()
 	defer func() {
-		//TODO : modify collector to save stats by shards
-		//collector.SetValidation(statsCollector, vc.validationStats)
+		collector.SetValidation(statsCollector, vc.validationStats)
 	}()
 
 	if applyingCache, ok := vc.epochApplyingCache[height]; ok {
