@@ -1,6 +1,6 @@
-## Idena Go
+## Idena Go Arm
 
-Golang implementation of the Idena network node
+Golang implementation of the Idena network node for arm
 
 [![Build Status](https://travis-ci.com/idena-network/idena-go.svg?branch=master)](https://travis-ci.com/idena-network/idena-go)
 
