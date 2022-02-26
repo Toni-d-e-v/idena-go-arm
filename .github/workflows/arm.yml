@@ -1,0 +1,22 @@
+name: Idena Arm
+
+on:
+  push:
+    branches: [ $default-branch ]
+  pull_request:
+    branches: [ $default-branch ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Go arm
+        run: wget https://go.dev/dl/go1.17.7.linux-armv6l.tar.gz
+        run: sudo tar -C /usr/local -xzf go1.17.7.linux-armv6l.tar.gz
+        run: rm go1.17.7.linux-armv6l.tar.gz
+      - name: Go path
+        run: echo "PATH=$PATH:/usr/local/go/bin GOPATH=$HOME/go" >> ~/.profile
+        run: source ~/.profile
+      - name Build Arm
+        run: CGO_ENABLED=1 GOOS=linux GOARCH=arm CC=arm-linux-gnueabihf-gcc go build -ldflags "-X main.version=0.28.5"
