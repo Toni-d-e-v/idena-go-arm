@@ -14,15 +14,17 @@ jobs:
     strategy:
       matrix:
         go-version: [1.16.x]
-        os: ['ubuntu-18.04', 'windows-latest', 'macos-latest']
+        os: ['ubuntu-18.04', 'windows-latest', 'macos-latest','aarch64']
     runs-on: ${{ matrix.os }}
-
     steps:
-      - name: Install Go
+      - name: Install Go Arch
+        if: matrix.build_name == 'aarch64'
+        run: wget https://go.dev/dl/go1.17.7.linux-armv6l.tar.gz &&  sudo tar -C /usr/local -xzf go1.17.7.linux-armv6l.tar.gz && rm go1.17.7.linux-armv6l.tar.gz
+      - name: Install go  
+        if: matrix.build_name != 'aarch64'
         uses: actions/setup-go@v2
         with:
           go-version: ${{ matrix.go-version }}
-
       - uses: actions/cache@v2
         with:
           path: ~/go/pkg/mod
@@ -57,9 +59,9 @@ jobs:
 
       - name: Build
         run: go build -ldflags "-X main.version=${{ env.GIT_TAG }}" -o=builds/${{ env.ASSET_NAME }}
-      - name: Build ARM
-        run: env GOOS=linux GOARCH=arm64 go build  -ldflags "-X main.version=${{ env.GIT_TAG }}" -o=armbuilds/${{ env.ASSET_NAME }}
-
+      - name: Build Arch 
+        if: matrix.build_name == 'aarch64'
+        run:  CGO_ENABLED=1 GOOS=linux GOARCH=arm CC=arm-linux-gnueabihf-gcc go build -ldflags "-X main.version=0.28.5"
       - name: Release
         uses: softprops/action-gh-release@v1
         env:
