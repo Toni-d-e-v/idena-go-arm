@@ -20,3 +20,10 @@ jobs:
         run: source ~/.profile
       - name Build Arm
         run: CGO_ENABLED=1 GOOS=linux GOARCH=arm CC=arm-linux-gnueabihf-gcc go build -ldflags "-X main.version=0.28.5"
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          draft: true
+          files: builds/${{ env.ASSET_NAME }}
