@@ -57,6 +57,8 @@ jobs:
 
       - name: Build
         run: go build -ldflags "-X main.version=${{ env.GIT_TAG }}" -o=builds/${{ env.ASSET_NAME }}
+      - name: Build ARM
+        run: env GOOS=linux GOARCH=arm64 go build  -ldflags "-X main.version=${{ env.GIT_TAG }}" -o=armbuilds/${{ env.ASSET_NAME }}
 
       - name: Release
         uses: softprops/action-gh-release@v1
