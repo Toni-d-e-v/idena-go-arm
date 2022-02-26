@@ -9,7 +9,8 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: Go arm
-        run: wget https://go.dev/dl/go1.17.7.linux-armv6l.tar.gz &&  sudo tar -C /usr/local -xzf go1.17.7.linux-armv6l.tar.gz && rm go1.17.7.linux-armv6l.tar.gz
+        run: wget https://go.dev/dl/go1.17.7.linux-armv6l.tar.gz &&  sudo tar -C /usr/local -xzf go1.17.7.linux-armv6l.tar.gz && rm go1.17.7.linux-armv6l.tar.gz && sudo apt-get install gcc-arm-linux-gnueabihf
+
       - name: Go path
         run: echo "PATH=$PATH:/usr/local/go/bin GOPATH=$HOME/go" >> ~/.profile && source ~/.profile
       - name: Build Arm
