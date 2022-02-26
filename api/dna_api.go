@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"github.com/idena-network/idena-go/blockchain"
 	"github.com/idena-network/idena-go/blockchain/attachments"
 	"github.com/idena-network/idena-go/blockchain/types"
+	"github.com/idena-network/idena-go/blockchain/validation"
 	"github.com/idena-network/idena-go/common"
 	"github.com/idena-network/idena-go/common/hexutil"
 	"github.com/idena-network/idena-go/core/appstate"
@@ -579,6 +581,12 @@ type ChangeProfileArgs struct {
 	MaxFee   decimal.Decimal `json:"maxFee"`
 }
 
+type SendChangeProfileTxArgs struct {
+	Sender *common.Address `json:"sender"`
+	Cid    string          `json:"cid"`
+	MaxFee decimal.Decimal `json:"maxFee"`
+}
+
 type ChangeProfileResponse struct {
 	TxHash common.Hash `json:"txHash"`
 	Hash   string      `json:"hash"`
@@ -589,6 +597,7 @@ type ProfileResponse struct {
 	Nickname string         `json:"nickname"`
 }
 
+// Deprecated: Use SendChangeProfileTx
 func (api *DnaApi) ChangeProfile(ctx context.Context, args ChangeProfileArgs) (ChangeProfileResponse, error) {
 	profileData := profile.Profile{}
 	if args.Info != nil && len(*args.Info) > 0 {
@@ -620,6 +629,7 @@ func (api *DnaApi) ChangeProfile(ctx context.Context, args ChangeProfileArgs) (C
 	}, nil
 }
 
+// Deprecated: Use Identity
 func (api *DnaApi) Profile(address *common.Address) (ProfileResponse, error) {
 	if address == nil {
 		coinbase := api.GetCoinbaseAddr()
@@ -642,6 +652,40 @@ func (api *DnaApi) Profile(address *common.Address) (ProfileResponse, error) {
 		Nickname: string(identityProfile.Nickname),
 		Info:     info,
 	}, nil
+}
+
+func (api *DnaApi) SendChangeProfileTx(ctx context.Context, args SendChangeProfileTxArgs) (common.Hash, error) {
+	var address = args.Sender
+	if address == nil {
+		coinbase := api.GetCoinbaseAddr()
+		address = &coinbase
+	}
+
+	if len(args.Cid) == 0 {
+		return common.Hash{}, errors.New("cid should be presented")
+	}
+
+	identity := api.baseApi.getReadonlyAppState().State.GetIdentity(*address)
+	if len(identity.ProfileHash) > 0 {
+		_ = api.baseApi.ipfs.Unpin(identity.ProfileHash)
+	}
+
+	c, err := cid.Parse(args.Cid)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	txHash, err := api.baseApi.sendTx(ctx, *address, nil, types.ChangeProfileTx, decimal.Zero,
+		args.MaxFee, decimal.Zero, 0, 0, attachments.CreateChangeProfileAttachment(c.Bytes()), nil)
+
+	if err != nil {
+		return common.Hash{}, errors.Wrap(err, "failed to send tx to change profile")
+	}
+
+	if err := api.baseApi.ipfs.Pin(c.Bytes()); err != nil {
+		return common.Hash{}, err
+	}
+
+	return txHash, nil
 }
 
 func (api *DnaApi) Sign(value string) hexutil.Bytes {
@@ -714,4 +758,55 @@ func (api *DnaApi) IsValidationReady() bool {
 func (api *DnaApi) WordsSeed() hexutil.Bytes {
 	seed := api.baseApi.getReadonlyAppState().State.FlipWordsSeed()
 	return seed[:]
+}
+
+type GlobalState struct {
+	NetworkSize int `json:"networkSize"`
+}
+
+func (api *DnaApi) GlobalState() GlobalState {
+	return GlobalState{
+		NetworkSize: api.baseApi.getReadonlyAppState().ValidatorsCache.NetworkSize(),
+	}
+}
+
+type SendToIpfsArgs struct {
+	Tx   *hexutil.Bytes `json:"tx"`
+	Data *hexutil.Bytes `json:"data"`
+}
+
+func (api *DnaApi) SendToIpfs(ctx context.Context, args SendToIpfsArgs) (common.Hash, error) {
+	if args.Tx == nil || args.Data == nil || len(*args.Data) == 0 {
+		return common.Hash{}, errors.New("all fields are required")
+	}
+	tx := new(types.Transaction)
+	if err := tx.FromBytes(*args.Tx); err != nil {
+		return common.Hash{}, err
+	}
+	attachment := attachments.ParseStoreToIpfsAttachment(tx)
+	if attachment == nil {
+		return common.Hash{}, validation.InvalidPayload
+	}
+	data := *args.Data
+	if uint32(len(data)) != attachment.Size {
+		return common.Hash{}, errors.New("sizes mismatch")
+	}
+	dataCid, err := api.baseApi.ipfs.Cid(data)
+	if err != nil {
+		return common.Hash{}, errors.Wrap(err, "failed to calculate cid")
+	}
+	if bytes.Compare(attachment.Cid, dataCid.Bytes()) != 0 {
+		return common.Hash{}, errors.New("cids mismatch")
+	}
+	if err := api.baseApi.txpool.Validate(tx); err != nil {
+		return common.Hash{}, errors.Wrap(err, "tx is not valid")
+	}
+	if _, err = api.baseApi.ipfs.Add(data, false); err != nil {
+		return common.Hash{}, errors.Wrap(err, "failed to add data to local storage")
+	}
+	txHash, err := api.baseApi.sendInternalTx(ctx, tx)
+	if err != nil {
+		return common.Hash{}, errors.Wrap(err, "failed to broadcast tx")
+	}
+	return txHash, nil
 }

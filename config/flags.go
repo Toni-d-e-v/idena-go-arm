@@ -16,22 +16,22 @@ const (
 	DefaultForceFullSync      = 100
 	DefaultStoreCertRange     = 2000
 
-	DefaultMaxInboundOwnShardPeers     = 6
-	DefaultMaxOutboundOwnShardPeers    = 3
-	DefaultMaxInboundNotOwnShardPeers  = 2
-	DefaultMaxOutboundNotOwnShardPeers = 1
+	DefaultMaxInboundOwnShardPeers     = 8
+	DefaultMaxOutboundOwnShardPeers    = 4
+	DefaultMaxInboundNotOwnShardPeers  = 4
+	DefaultMaxOutboundNotOwnShardPeers = 2
 
-	DefaultBurntTxRange = 180
+	DefaultBurntTxRange = 4320
 
 	LowPowerMaxInboundOwnShardPeers     = 3
 	LowPowerMaxOutboundOwnShardPeers    = 2
 	LowPowerMaxInboundNotOwnShardPeers  = 1
 	LowPowerMaxOutboundNotOwnShardPeers = 1
 
-	SharedNodeMaxInboundOwnShardPeers     = 9
+	SharedNodeMaxInboundOwnShardPeers     = 11
 	SharedNodeMaxOutboundOwnShardPeers    = 5
-	SharedNodeMaxInboundNotOwnShardPeers  = 4
-	SharedNodeMaxOutboundNotOwnShardPeers = 2
+	SharedNodeMaxInboundNotOwnShardPeers  = 6
+	SharedNodeMaxOutboundNotOwnShardPeers = 3
 )
 
 var (
@@ -126,5 +126,9 @@ var (
 	LogColoring = cli.BoolFlag{
 		Name:  "logcoloring",
 		Usage: "Use log coloring",
+	}
+	AutoOnline = cli.BoolFlag{
+		Name:  "autoonline",
+		Usage: "Node will automatically turn on online mining status",
 	}
 )
